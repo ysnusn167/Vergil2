@@ -1,0 +1,57 @@
+<!doctype html>
+<html dir="rtl" lang="fa">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>نصب خودکار پنل روی کلادفلر</title>
+<style>
+  :root { --bg:#eef1f5; --ink:#1b2433; --card:#fff; --acc:#0b6e4f; --mut:#6b7686; --warn:#a4380a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12171f; --ink:#e6ebf2; --card:#1b232f; --acc:#3ccf97; --mut:#93a0b2; --warn:#ff9466; } }
+  body { font-family: Vazirmatn, Tahoma, system-ui, sans-serif; background:var(--bg); color:var(--ink); max-width:520px; margin:0 auto; padding:16px; line-height:1.8; }
+  .w { background:var(--card); padding:16px; border-radius:10px; }
+  input, select, button { font:inherit; width:100%; box-sizing:border-box; padding:11px 12px; border-radius:8px; border:1px solid var(--mut); background:var(--card); color:var(--ink); margin:5px 0; }
+  button { background:var(--acc); color:#fff; border:0; cursor:pointer; margin-top:12px; }
+  button:disabled { opacity:.6; cursor:wait; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
+  .warn { color:var(--warn); font-size:.92rem; }
+  .r { display:flex; gap:8px; align-items:flex-start; font-size:.92rem; margin-top:10px; }
+  .r input { width:auto; margin-top:7px; }
+  small { color:var(--mut); }
+  pre { white-space:pre-wrap; word-break:break-all; }
+</style>
+<h2>نصب خودکار پنل روی کلادفلر</h2>
+<div class="w">
+  <label for="t">روش ورود</label>
+  <select id="t"><option value="t">API Token (پیشنهادی)</option><option value="k">Global API Key</option></select>
+  <small id="h"></small>
+  <input id="e" type="email" placeholder="ایمیل کلادفلر" autocomplete="off">
+  <input id="k" type="password" placeholder="API Token" autocomplete="off">
+  <input id="n" placeholder="نام Worker، مثلا my-panel" autocomplete="off">
+  <input id="p" type="password" placeholder="رمز پنل (حداقل ۸ کاراکتر)" autocomplete="new-password">
+  <p class="warn" id="w">Global API Key به کل اکانت شما دسترسی کامل دارد، از جمله دامنه‌ها و DNS. اگر می‌توانید، API Token محدود بسازید.</p>
+  <label class="r"><input type="checkbox" id="c"><span>اجازه می‌دهم از این اطلاعات فقط برای ساخت پنل روی اکانتم استفاده شود. ذخیره یا ثبت نمی‌شود. می‌دانم کلادفلر ممکن است مصرف پروکسی را محدود کند.</span></label>
+  <button id="go">نصب پنل</button>
+  <pre id="o"></pre>
+</div>
+<script>
+const $ = (i) => document.getElementById(i);
+function mode() {
+  const tok = $('t').value === 't';
+  $('e').hidden = tok;
+  $('w').hidden = tok;
+  $('k').placeholder = tok ? 'API Token' : 'Global API Key';
+  $('h').textContent = tok ? 'دسترسی لازم: Workers Scripts و Workers KV Storage (Edit) و Account Settings (Read)' : '';
+}
+$('t').onchange = mode; mode();
+
+$('go').onclick = async () => {
+  const b = { name: $('n').value.trim(), password: $('p').value, consent: $('c').checked };
+  if ($('t').value === 't') b.token = $('k').value.trim(); else { b.email = $('e').value.trim(); b.key = $('k').value.trim(); }
+  $('go').disabled = true; $('o').textContent = 'در حال نصب...';
+  try {
+    const r = await fetch('/api/deploy', { method: 'POST', body: JSON.stringify(b) });
+    const d = await r.json();
+    $('o').textContent = d.error ? 'خطا: ' + d.error : 'پنل آماده شد:\n' + d.url + '\nبا رمزی که تعیین کردید وارد شوید.';
+  } catch { $('o').textContent = 'خطا: اتصال برقرار نشد'; }
+  $('go').disabled = false;
+};
+</script>

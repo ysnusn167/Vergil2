@@ -1,0 +1,82 @@
+import { connect } from 'cloudflare:sockets';
+
+const PANEL = __PANEL__;
+const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+const fmt = (h) => h.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
+const json = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { 'content-type': 'application/json' } });
+
+export default {
+  async fetch(req, env) {
+    const url = new URL(req.url);
+    if (req.headers.get('Upgrade') === 'websocket') return proxy(env);
+    if (url.pathname.startsWith('/sub/')) return sub(url, env);
+    if (url.pathname.startsWith('/api/')) return api(req, url, env);
+    return new Response(PANEL, { headers: { 'content-type': 'text/html;charset=utf-8' } });
+  },
+};
+
+async function sub(url, env) {
+  const id = url.pathname.slice(5);
+  const u = await env.KV.get('u:' + id, 'json');
+  if (!u) return new Response('not found', { status: 404 });
+  const h = url.host;
+  const link = `vless://${id}@${h}:443?encryption=none&security=tls&sni=${h}&fp=chrome&type=ws&host=${h}&path=%2F#${encodeURIComponent(u.name)}`;
+  return new Response(btoa(link));
+}
+
+async function api(req, url, env) {
+  if (req.headers.get('Authorization') !== 'Bearer ' + env.ADMIN_PASSWORD) return json({ error: 'unauthorized' }, 401);
+  if (url.pathname === '/api/users' && req.method === 'GET') {
+    const { keys } = await env.KV.list({ prefix: 'u:' });
+    return json(await Promise.all(keys.map(async (k) => ({ id: k.name.slice(2), ...(await env.KV.get(k.name, 'json')) }))));
+  }
+  if (url.pathname === '/api/users' && req.method === 'POST') {
+    const { name, days } = await req.json();
+    const id = crypto.randomUUID();
+    await env.KV.put('u:' + id, JSON.stringify({ name: name || 'user', exp: days ? Date.now() + days * 864e5 : 0 }));
+    return json({ id });
+  }
+  if (req.method === 'DELETE') {
+    await env.KV.delete('u:' + url.pathname.split('/').pop());
+    return json({ ok: 1 });
+  }
+  return json({ error: 'bad request' }, 400);
+}
+
+function proxy(env) {
+  const [client, ws] = Object.values(new WebSocketPair());
+  ws.accept();
+  let remote, writer, hdr;
+  let chain = Promise.resolve();
+
+  async function onData(data) {
+    const b = new Uint8Array(data);
+    if (writer) return writer.write(b);
+    const id = fmt(hex(b.slice(1, 17)));
+    const u = await env.KV.get('u:' + id, 'json');
+    if (!u || (u.exp && Date.now() > u.exp)) return ws.close();
+    const o = 18 + b[17];
+    if (b[o] !== 1) return ws.close(); // TCP only
+    const port = (b[o + 1] << 8) | b[o + 2];
+    const t = b[o + 3];
+    let p = o + 4, host;
+    if (t === 1) { host = b.slice(p, p + 4).join('.'); p += 4; }
+    else if (t === 2) { const l = b[p]; host = new TextDecoder().decode(b.slice(p + 1, p + 1 + l)); p += 1 + l; }
+    else { const v = new DataView(b.buffer, b.byteOffset + p, 16); host = [...Array(8)].map((_, i) => v.getUint16(i * 2).toString(16)).join(':'); p += 16; }
+    hdr = new Uint8Array([b[0], 0]);
+    remote = connect({ hostname: host, port });
+    writer = remote.writable.getWriter();
+    await writer.write(b.slice(p));
+    remote.readable.pipeTo(new WritableStream({
+      write(c) {
+        if (hdr) { const m = new Uint8Array(2 + c.length); m.set(hdr); m.set(c, 2); c = m; hdr = null; }
+        ws.send(c);
+      },
+      close() { ws.close(); },
+    })).catch(() => ws.close());
+  }
+
+  ws.addEventListener('message', (e) => { chain = chain.then(() => onData(e.data)).catch(() => ws.close()); });
+  ws.addEventListener('close', () => { try { remote?.close(); } catch {} });
+  return new Response(null, { status: 101, webSocket: client });
+}
